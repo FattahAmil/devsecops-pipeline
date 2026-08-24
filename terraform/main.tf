@@ -5,37 +5,72 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Terraform S3 Backend for remote state management
+  # backend "s3" {
+  #   bucket         = "mon-bucket-terraform-state-devsecops"
+  #   key            = "devsecops/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   dynamodb_table = "terraform-state-lock"
+  #   encrypt        = true
+  # }
 }
 
 provider "aws" {
   region = var.aws_region
 }
 
-resource "aws_security_group" "web_sg" {
-  name        = "web_sg"
-  description = "Allow HTTP inbound traffic"
+# ---------------------------------------------------------
+# VPC Module (Réseau Privé pour Kubernetes)
+# ---------------------------------------------------------
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  name = "devsecops-vpc"
+  cidr = "10.0.0.0/16"
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+
+  enable_nat_gateway = true
+  single_nat_gateway = true
+
+  tags = {
+    Environment = "dev"
+    Project     = "devsecops-demo"
   }
 }
 
-resource "aws_instance" "web_server" {
-  ami           = "ami-0c7217cdde317cfec" # Example AMI for Ubuntu 22.04 LTS (us-east-1)
-  instance_type = "t2.micro" # Free tier eligible
-  security_groups = [aws_security_group.web_sg.name]
+# ---------------------------------------------------------
+# EKS Cluster Module (Kubernetes)
+# ---------------------------------------------------------
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "19.16.0"
+
+  cluster_name    = "devsecops-cluster"
+  cluster_version = "1.27"
+
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnets
+
+  cluster_endpoint_public_access = true
+
+  eks_managed_node_groups = {
+    general = {
+      desired_size = 2
+      min_size     = 1
+      max_size     = 3
+
+      instance_types = ["t3.medium"] # t3.medium est recommandé pour EKS
+      capacity_type  = "ON_DEMAND"
+    }
+  }
 
   tags = {
-    Name = "DevSecOps-Demo-Server"
+    Environment = "dev"
+    Project     = "devsecops-demo"
   }
 }
